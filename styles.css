@@ -420,17 +420,6 @@ select {
   object-fit: cover;
 }
 
-.destination-photo-wrap.is-loading::before,
-.destination-photo-wrap.is-fallback::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(135deg, rgba(13, 112, 128, 0.24), transparent 38%),
-    linear-gradient(45deg, rgba(214, 98, 71, 0.18), transparent 52%),
-    #dfeadf;
-}
-
 .destination-photo-wrap.is-loading::after {
   content: "正在加载代表照片";
   position: absolute;
@@ -442,15 +431,7 @@ select {
 }
 
 .destination-photo-wrap.is-fallback::after {
-  content: "暂无可用照片，已使用风景插画兜底";
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  color: var(--green);
-  font-weight: 800;
-  text-align: center;
+  content: none;
 }
 
 .destination-photo-wrap figcaption {

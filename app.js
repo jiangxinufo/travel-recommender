@@ -230,7 +230,31 @@ function getShareText(destination = state.activeDestination) {
 }
 
 function getPhotoCacheKey(destination) {
-  return `travel-photo-wiki-v3:${destination.id}`;
+  return `travel-photo-wiki-v4:${destination.id}`;
+}
+
+function readPhotoCache(destination) {
+  try {
+    return localStorage.getItem(getPhotoCacheKey(destination));
+  } catch {
+    return null;
+  }
+}
+
+function writePhotoCache(destination, photo) {
+  try {
+    localStorage.setItem(getPhotoCacheKey(destination), JSON.stringify(photo));
+  } catch {
+    // Cache is a performance hint; image rendering should not depend on it.
+  }
+}
+
+function removePhotoCache(destination) {
+  try {
+    localStorage.removeItem(getPhotoCacheKey(destination));
+  } catch {
+    // Ignore unavailable storage.
+  }
 }
 
 function getFallbackPhoto(destination) {
@@ -272,32 +296,52 @@ function getWikiTitles(destination) {
 }
 
 async function fetchWikiImage(title) {
-  const params = new URLSearchParams({
+  const exactParams = new URLSearchParams({
     action: "query",
     format: "json",
     origin: "*",
     prop: "pageimages",
-    piprop: "original",
+    piprop: "thumbnail|original",
+    pithumbsize: "1400",
     redirects: "1",
     titles: title
   });
+  const exactImage = await fetchWikiImageFromParams(exactParams);
+  if (exactImage) return exactImage;
+
+  const searchParams = new URLSearchParams({
+    action: "query",
+    format: "json",
+    origin: "*",
+    generator: "search",
+    gsrsearch: title,
+    gsrlimit: "5",
+    prop: "pageimages",
+    piprop: "thumbnail|original",
+    pithumbsize: "1400"
+  });
+  return fetchWikiImageFromParams(searchParams);
+}
+
+async function fetchWikiImageFromParams(params) {
   const response = await fetch(`https://zh.wikipedia.org/w/api.php?${params.toString()}`);
   if (!response.ok) throw new Error("Wiki 图片接口请求失败");
   const data = await response.json();
-  const page = Object.values(data.query?.pages || {}).find((item) => item.original?.source);
-  return page?.original?.source || "";
+  const pages = Object.values(data.query?.pages || {}).sort((a, b) => (a.index || 0) - (b.index || 0));
+  const page = pages.find((item) => item.thumbnail?.source || item.original?.source);
+  return page?.thumbnail?.source || page?.original?.source || "";
 }
 
 async function resolveDestinationPhoto(destination) {
-  if (destination.image && await canDisplayImage(destination.image)) {
-    return { url: destination.image, credit: destination.imageCredit || "精选照片" };
-  }
-
-  const cached = localStorage.getItem(getPhotoCacheKey(destination));
+  const cached = readPhotoCache(destination);
   if (cached) {
-    const cachedPhoto = JSON.parse(cached);
-    if (cachedPhoto.fallback || await canDisplayImage(cachedPhoto.url, 2500)) return cachedPhoto;
-    localStorage.removeItem(getPhotoCacheKey(destination));
+    try {
+      const cachedPhoto = JSON.parse(cached);
+      if (!cachedPhoto.fallback && await canDisplayImage(cachedPhoto.url, 2500)) return cachedPhoto;
+    } catch {
+      // Ignore corrupt cache and resolve the image from Wiki again.
+    }
+    removePhotoCache(destination);
   }
 
   for (const title of [...new Set(getWikiTitles(destination))]) {
@@ -305,12 +349,16 @@ async function resolveDestinationPhoto(destination) {
       const url = await fetchWikiImage(title);
       if (url && await canDisplayImage(url)) {
         const resolved = { url, credit: `图片来源：Wiki/Wikimedia（${title}）` };
-        localStorage.setItem(getPhotoCacheKey(destination), JSON.stringify(resolved));
+        writePhotoCache(destination, resolved);
         return resolved;
       }
     } catch {
       // Keep trying other title candidates, then fall back to local artwork.
     }
+  }
+
+  if (destination.image && await canDisplayImage(destination.image)) {
+    return { url: destination.image, credit: destination.imageCredit || "备用精选照片" };
   }
 
   return { url: getFallbackPhoto(destination), credit: "本地生成主题图，可在配置中替换为精选照片", fallback: true };
@@ -335,7 +383,7 @@ async function renderDestinationPhoto(destination) {
     if (wrap.dataset.loadingId !== token) return;
     const fallback = { url: getFallbackPhoto(destination), credit: "图片加载失败，已切换为本地风景插画", fallback: true };
     destination.resolvedImage = fallback;
-    localStorage.removeItem(getPhotoCacheKey(destination));
+    removePhotoCache(destination);
     wrap.classList.add("is-fallback");
     img.src = fallback.url;
     caption.textContent = fallback.credit;
