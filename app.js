@@ -30,6 +30,7 @@ const closePosterButton = document.querySelector("#closePosterButton");
 const downloadPosterButton = document.querySelector("#downloadPosterButton");
 const shareToast = document.querySelector("#shareToast");
 const contributeLink = document.querySelector("#contributeLink");
+const backTopButton = document.querySelector("#backTopButton");
 
 function normalizeDestinations(config) {
   if (!config || !Array.isArray(config.provinces)) {
@@ -690,11 +691,59 @@ function shouldScrollToResult() {
   return typeof window.matchMedia === "function" && window.matchMedia("(max-width: 720px)").matches;
 }
 
+function jumpToResult() {
+  const rect = resultPanel.getBoundingClientRect();
+  const currentTop = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  const targetTop = Math.max(0, currentTop + rect.top - 10);
+
+  try {
+    window.scrollTo({ top: targetTop, behavior: "smooth" });
+  } catch {
+    window.scrollTo(0, targetTop);
+  }
+
+  document.documentElement.scrollTop = targetTop;
+  document.body.scrollTop = targetTop;
+}
+
 function scrollToResultOnMobile() {
   if (!shouldScrollToResult()) return;
-  window.requestAnimationFrame(() => {
-    resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
+
+  const jump = () => {
+    jumpToResult();
+    if (window.location.hash !== "#recommendationResult") {
+      history.replaceState(null, "", "#recommendationResult");
+    }
+  };
+
+  window.requestAnimationFrame(jump);
+  window.setTimeout(jump, 80);
+  window.setTimeout(jump, 260);
+  window.setTimeout(() => {
+    try {
+      resultPanel.focus({ preventScroll: true });
+    } catch {
+      resultPanel.focus();
+    }
+  }, 320);
+}
+
+function getScrollTop() {
+  return window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+}
+
+function updateBackTopVisibility() {
+  backTopButton.classList.toggle("is-visible", getScrollTop() > 420);
+}
+
+function backToTop() {
+  try {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch {
+    window.scrollTo(0, 0);
+  }
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
 }
 
 function chooseRandom() {
@@ -767,6 +816,9 @@ function init() {
     await copyText(getShareText());
     showToast("分享文案已复制");
   });
+  backTopButton.addEventListener("click", backToTop);
+  window.addEventListener("scroll", updateBackTopVisibility, { passive: true });
+  updateBackTopVisibility();
   [provinceFilter, regionFilter, moodFilter, seasonFilter, currentSeasonFilter, quietFilter].forEach((control) => {
     control.addEventListener("change", refreshPool);
   });
