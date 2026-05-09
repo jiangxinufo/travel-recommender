@@ -190,6 +190,7 @@ function renderDestination(destination) {
 }
 
 function getShareUrl() {
+  if (appConfig.shareUrl) return appConfig.shareUrl;
   return window.location.href.split("#")[0];
 }
 
@@ -318,20 +319,176 @@ function drawPosterLandscape(ctx, destination) {
   }
 }
 
-function drawMiniCode(ctx, x, y, size) {
+function makeQrCode(text) {
+  const version = 5;
+  const size = version * 4 + 17;
+  const dataCodewords = 108;
+  const eccCodewords = 26;
+  const matrix = Array.from({ length: size }, () => Array(size).fill(false));
+  const reserved = Array.from({ length: size }, () => Array(size).fill(false));
+
+  const setFunction = (x, y, value) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    matrix[y][x] = value;
+    reserved[y][x] = true;
+  };
+
+  const drawFinder = (x, y) => {
+    for (let dy = -1; dy <= 7; dy += 1) {
+      for (let dx = -1; dx <= 7; dx += 1) {
+        const xx = x + dx;
+        const yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= size || yy >= size) continue;
+        const dark = dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6 && (dx === 0 || dx === 6 || dy === 0 || dy === 6 || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
+        setFunction(xx, yy, dark);
+      }
+    }
+  };
+
+  const drawAlignment = (cx, cy) => {
+    for (let dy = -2; dy <= 2; dy += 1) {
+      for (let dx = -2; dx <= 2; dx += 1) {
+        const distance = Math.max(Math.abs(dx), Math.abs(dy));
+        setFunction(cx + dx, cy + dy, distance !== 1);
+      }
+    }
+  };
+
+  drawFinder(0, 0);
+  drawFinder(size - 7, 0);
+  drawFinder(0, size - 7);
+  drawAlignment(30, 30);
+
+  for (let i = 0; i < size; i += 1) {
+    setFunction(6, i, i % 2 === 0);
+    setFunction(i, 6, i % 2 === 0);
+  }
+  setFunction(8, size - 8, true);
+  for (let i = 0; i <= 5; i += 1) setFunction(8, i, false);
+  setFunction(8, 7, false);
+  setFunction(8, 8, false);
+  setFunction(7, 8, false);
+  for (let i = 9; i < 15; i += 1) setFunction(14 - i, 8, false);
+  for (let i = 0; i < 8; i += 1) setFunction(size - 1 - i, 8, false);
+  for (let i = 8; i < 15; i += 1) setFunction(8, size - 15 + i, false);
+
+  const bytes = [...new TextEncoder().encode(text)];
+  if (bytes.length > 105) {
+    throw new Error("分享网址过长，无法生成当前版本二维码");
+  }
+
+  const bits = [];
+  const appendBits = (value, length) => {
+    for (let i = length - 1; i >= 0; i -= 1) bits.push(((value >>> i) & 1) !== 0);
+  };
+
+  appendBits(0x4, 4);
+  appendBits(bytes.length, 8);
+  bytes.forEach((byte) => appendBits(byte, 8));
+  appendBits(0, Math.min(4, dataCodewords * 8 - bits.length));
+  while (bits.length % 8 !== 0) bits.push(false);
+
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let value = 0;
+    for (let j = 0; j < 8; j += 1) value = (value << 1) | (bits[i + j] ? 1 : 0);
+    data.push(value);
+  }
+  for (let pad = 0xec; data.length < dataCodewords; pad ^= 0xec ^ 0x11) {
+    data.push(pad);
+  }
+
+  const multiply = (x, y) => {
+    let z = 0;
+    for (let i = 7; i >= 0; i -= 1) {
+      z = ((z << 1) ^ ((z >>> 7) * 0x11d)) & 0xff;
+      if (((y >>> i) & 1) !== 0) z ^= x;
+    }
+    return z;
+  };
+
+  const generator = Array(eccCodewords).fill(0);
+  generator[eccCodewords - 1] = 1;
+  for (let i = 0, root = 1; i < eccCodewords; i += 1) {
+    for (let j = 0; j < eccCodewords; j += 1) {
+      generator[j] = multiply(generator[j], root);
+      if (j + 1 < eccCodewords) generator[j] ^= generator[j + 1];
+    }
+    root = multiply(root, 0x02);
+  }
+
+  const ecc = Array(eccCodewords).fill(0);
+  data.forEach((byte) => {
+    const factor = byte ^ ecc.shift();
+    ecc.push(0);
+    generator.forEach((coefficient, index) => {
+      ecc[index] ^= multiply(coefficient, factor);
+    });
+  });
+
+  const codewords = data.concat(ecc);
+  let bitIndex = 0;
+  let upward = true;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right -= 1;
+    for (let vert = 0; vert < size; vert += 1) {
+      const y = upward ? size - 1 - vert : vert;
+      for (let col = 0; col < 2; col += 1) {
+        const x = right - col;
+        if (reserved[y][x]) continue;
+        const dark = bitIndex < codewords.length * 8 && (((codewords[bitIndex >>> 3] >>> (7 - (bitIndex & 7))) & 1) !== 0);
+        matrix[y][x] = dark !== ((x + y) % 2 === 0);
+        bitIndex += 1;
+      }
+    }
+    upward = !upward;
+  }
+
+  const formatData = 0x08;
+  let remainder = formatData;
+  for (let i = 0; i < 10; i += 1) {
+    remainder = (remainder << 1) ^ (((remainder >>> 9) & 1) * 0x537);
+  }
+  const formatBits = ((formatData << 10) | remainder) ^ 0x5412;
+  const getBit = (value, index) => ((value >>> index) & 1) !== 0;
+  const setFormat = (x, y, index) => {
+    matrix[y][x] = getBit(formatBits, index);
+  };
+
+  for (let i = 0; i <= 5; i += 1) setFormat(8, i, i);
+  setFormat(8, 7, 6);
+  setFormat(8, 8, 7);
+  setFormat(7, 8, 8);
+  for (let i = 9; i < 15; i += 1) setFormat(14 - i, 8, i);
+  for (let i = 0; i < 8; i += 1) setFormat(size - 1 - i, 8, i);
+  for (let i = 8; i < 15; i += 1) setFormat(8, size - 15 + i, i);
+  matrix[size - 8][8] = true;
+
+  return matrix;
+}
+
+function drawQrCode(ctx, text, x, y, size) {
+  const matrix = makeQrCode(text);
+  const quiet = 4;
+  const moduleCount = matrix.length + quiet * 2;
+  const moduleSize = Math.floor(size / moduleCount);
+  const drawnSize = moduleSize * moduleCount;
+  const offset = Math.floor((size - drawnSize) / 2);
+
   ctx.fillStyle = "#fff";
   ctx.fillRect(x, y, size, size);
   ctx.fillStyle = "#1f2a2d";
-  const cell = size / 11;
-  const seed = state.activeDestination.id.length + state.activeDestination.name.length;
-  for (let row = 0; row < 11; row += 1) {
-    for (let col = 0; col < 11; col += 1) {
-      const finder = (row < 3 && col < 3) || (row < 3 && col > 7) || (row > 7 && col < 3);
-      if (finder || (row * 7 + col * 11 + seed) % 5 < 2) {
-        ctx.fillRect(x + col * cell + 2, y + row * cell + 2, cell - 3, cell - 3);
-      }
-    }
-  }
+  matrix.forEach((row, rowIndex) => {
+    row.forEach((dark, colIndex) => {
+      if (!dark) return;
+      ctx.fillRect(
+        x + offset + (colIndex + quiet) * moduleSize,
+        y + offset + (rowIndex + quiet) * moduleSize,
+        moduleSize,
+        moduleSize
+      );
+    });
+  });
 }
 
 function renderPoster(destination = state.activeDestination) {
@@ -372,7 +529,7 @@ function renderPoster(destination = state.activeDestination) {
   ctx.font = "30px Microsoft YaHei, sans-serif";
   wrapText(ctx, destination.reasons[0], 72, nextY + 96, 770, 46, 3);
 
-  drawMiniCode(ctx, 780, 1142, 190);
+  drawQrCode(ctx, getShareUrl(), 780, 1142, 190);
   ctx.fillStyle = "#63706c";
   ctx.font = "24px Microsoft YaHei, sans-serif";
   ctx.fillText("分享网址", 72, 1268);
