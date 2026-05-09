@@ -207,7 +207,7 @@ function getShareText(destination = state.activeDestination) {
 }
 
 function getPhotoCacheKey(destination) {
-  return `travel-photo:${destination.id}`;
+  return `travel-photo-cn-v2:${destination.id}`;
 }
 
 function getFallbackPhoto(destination) {
@@ -218,8 +218,7 @@ function getFallbackPhoto(destination) {
 }
 
 function getPhotoCandidates(destination) {
-  const query = encodeURIComponent(destination.imageQuery || destination.name);
-  const wikiTitles = [
+  const baikeTitles = [
     destination.name,
     destination.name.replace(/镇|乡|街道|片区|村|县城|古城$/g, ""),
     destination.city,
@@ -229,26 +228,62 @@ function getPhotoCandidates(destination) {
   return {
     explicit: destination.image,
     fallback: getFallbackPhoto(destination),
-    wikiTitles: [...new Set(wikiTitles)],
-    commonsUrl: `https://commons.wikimedia.org/w/index.php?search=${query}&title=Special:MediaSearch&type=image`
+    baikeTitles: [...new Set(baikeTitles)]
   };
 }
 
-async function fetchWikiImage(title) {
-  const params = new URLSearchParams({
-    action: "query",
-    format: "json",
-    origin: "*",
-    prop: "pageimages",
-    piprop: "original",
-    redirects: "1",
-    titles: title
+function normalizeDomesticImageUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  if (!/^https?:\/\//.test(url)) return "";
+  return url.replace(/^http:\/\//, "https://");
+}
+
+function fetchJsonp(url, callbackParam = "callback") {
+  return new Promise((resolve, reject) => {
+    const callbackName = `__travelPhoto${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    const script = document.createElement("script");
+    const cleanup = () => {
+      delete window[callbackName];
+      script.remove();
+    };
+
+    window[callbackName] = (data) => {
+      cleanup();
+      resolve(data);
+    };
+    script.onerror = () => {
+      cleanup();
+      reject(new Error("JSONP 图片接口请求失败"));
+    };
+    script.src = `${url}${url.includes("?") ? "&" : "?"}${callbackParam}=${callbackName}`;
+    document.body.append(script);
   });
-  const response = await fetch(`https://zh.wikipedia.org/w/api.php?${params.toString()}`);
-  if (!response.ok) throw new Error("图片接口请求失败");
-  const data = await response.json();
-  const page = Object.values(data.query?.pages || {}).find((item) => item.original?.source);
-  return page?.original?.source || "";
+}
+
+async function fetchBaiduBaikeImage(title) {
+  const params = new URLSearchParams({
+    scope: "103",
+    format: "json",
+    appid: "379020",
+    bk_key: title,
+    bk_length: "600"
+  });
+  const apiUrl = `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?${params.toString()}`;
+  let data = null;
+
+  try {
+    const response = await fetch(apiUrl);
+    if (response.ok) data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!data) {
+    data = await fetchJsonp(apiUrl);
+  }
+
+  const image = Array.isArray(data?.image) ? data.image[0] : data?.image;
+  return normalizeDomesticImageUrl(image || data?.thumbnail || data?.pic);
 }
 
 async function resolveDestinationPhoto(destination) {
@@ -258,11 +293,11 @@ async function resolveDestinationPhoto(destination) {
   const cached = localStorage.getItem(getPhotoCacheKey(destination));
   if (cached) return JSON.parse(cached);
 
-  for (const title of candidates.wikiTitles) {
+  for (const title of candidates.baikeTitles) {
     try {
-      const url = await fetchWikiImage(title);
+      const url = await fetchBaiduBaikeImage(title);
       if (url) {
-        const resolved = { url, credit: `图片来源：维基百科/维基共享资源（${title}）` };
+        const resolved = { url, credit: `图片来源：百度百科（${title}）` };
         localStorage.setItem(getPhotoCacheKey(destination), JSON.stringify(resolved));
         return resolved;
       }
@@ -271,7 +306,7 @@ async function resolveDestinationPhoto(destination) {
     }
   }
 
-  return { url: candidates.fallback, credit: `未找到开放照片，可到维基共享资源搜索：${destination.imageQuery || destination.name}`, fallback: true };
+  return { url: candidates.fallback, credit: `未匹配到国内网站照片，已使用本地风景插画兜底：${destination.imageQuery || destination.name}`, fallback: true };
 }
 
 async function renderDestinationPhoto(destination) {
@@ -729,21 +764,44 @@ function scrollToResultOnMobile() {
 }
 
 function getScrollTop() {
-  return window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  const scrollingElement = document.scrollingElement || document.documentElement || document.body;
+  return window.pageYOffset || scrollingElement.scrollTop || document.documentElement.scrollTop || document.body.scrollTop || 0;
 }
 
 function updateBackTopVisibility() {
   backTopButton.classList.toggle("is-visible", getScrollTop() > 420);
 }
 
-function backToTop() {
-  try {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  } catch {
-    window.scrollTo(0, 0);
-  }
+function forceScrollTop() {
+  const scrollingElement = document.scrollingElement || document.documentElement || document.body;
+  if (scrollingElement) scrollingElement.scrollTop = 0;
   document.documentElement.scrollTop = 0;
   document.body.scrollTop = 0;
+  try {
+    window.scrollTo(0, 0);
+  } catch {
+    // Older embedded browsers may throw, but scrollTop writes above still work.
+  }
+}
+
+function backToTop(event) {
+  if (event) event.preventDefault();
+  if (window.location.hash) {
+    history.replaceState(null, "", window.location.href.split("#")[0]);
+  }
+
+  try {
+    document.querySelector("#pageTop").focus({ preventScroll: true });
+  } catch {
+    document.querySelector("#pageTop").focus();
+  }
+
+  forceScrollTop();
+  window.requestAnimationFrame(forceScrollTop);
+  window.setTimeout(forceScrollTop, 60);
+  window.setTimeout(forceScrollTop, 180);
+  window.setTimeout(forceScrollTop, 360);
+  updateBackTopVisibility();
 }
 
 function chooseRandom() {
@@ -817,6 +875,8 @@ function init() {
     showToast("分享文案已复制");
   });
   backTopButton.addEventListener("click", backToTop);
+  backTopButton.addEventListener("pointerup", backToTop);
+  backTopButton.addEventListener("touchend", backToTop, { passive: false });
   window.addEventListener("scroll", updateBackTopVisibility, { passive: true });
   updateBackTopVisibility();
   [provinceFilter, regionFilter, moodFilter, seasonFilter, currentSeasonFilter, quietFilter].forEach((control) => {
