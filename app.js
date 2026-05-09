@@ -164,6 +164,9 @@ function renderList(items) {
 }
 
 function renderDestination(destination) {
+  document.querySelector("#destinationPhotoWrap").style.display = "";
+  posterButton.disabled = false;
+  copyShareButton.disabled = false;
   state.activeId = destination.id;
   state.activeDestination = destination;
   document.querySelector("#destinationLevel").textContent = `${destination.level}目的地`;
@@ -195,6 +198,26 @@ function renderDestination(destination) {
   renderDestinationPhoto(destination);
 }
 
+function renderNoResults() {
+  state.activeId = null;
+  state.activeDestination = null;
+  posterButton.disabled = true;
+  copyShareButton.disabled = true;
+  document.querySelector("#destinationPhotoWrap").style.display = "none";
+  document.querySelector("#destinationLevel").textContent = "暂无匹配";
+  document.querySelector("#provinceLine").textContent = "当前筛选组合没有可推荐目的地";
+  document.querySelector("#destinationName").textContent = "没有找到符合条件的目的地";
+  document.querySelector("#fitScore").textContent = "--";
+  document.querySelector("#destinationSummary").textContent = "请尝试取消“符合当前季节”、放宽省份/区域，或减少旅行偏好限制后再随机推荐。";
+  document.querySelector("#factsGrid").innerHTML = "";
+  document.querySelector("#resourceList").innerHTML = "<li>当前目的地池没有命中这些筛选条件。</li>";
+  document.querySelector("#reasonList").innerHTML = "<li>筛选条件会被严格遵守，不再自动跳到其他省份或区域。</li>";
+  document.querySelector("#routePlan").textContent = "放宽筛选后会重新生成轻松玩法。";
+  document.querySelector("#transportBox").style.display = "none";
+  document.querySelector("#sourceStrip").innerHTML = "";
+  renderList([]);
+}
+
 function getShareUrl() {
   if (appConfig.shareUrl) return appConfig.shareUrl;
   return window.location.href.split("#")[0];
@@ -207,7 +230,7 @@ function getShareText(destination = state.activeDestination) {
 }
 
 function getPhotoCacheKey(destination) {
-  return `travel-photo-cn-v2:${destination.id}`;
+  return `travel-photo-wiki-v3:${destination.id}`;
 }
 
 function getFallbackPhoto(destination) {
@@ -215,27 +238,6 @@ function getFallbackPhoto(destination) {
   const bg = "dfeadf";
   const fg = "2f7d62";
   return `data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 675'%3E%3Crect width='1200' height='675' fill='%23${bg}'/%3E%3Cpath d='M0 454 210 210l165 190 225-270 290 330 160-190 150 184v221H0z' fill='%238eb579'/%3E%3Cpath d='M0 520c210-80 380 15 560-48 210-73 380 30 640-55v258H0z' fill='%236c9d5a'/%3E%3Ccircle cx='985' cy='110' r='58' fill='%23fffaf2' opacity='.76'/%3E%3Ctext x='70' y='575' font-size='52' font-weight='700' fill='%23${fg}' font-family='Microsoft YaHei, sans-serif'%3E${text}%3C/text%3E%3C/svg%3E`;
-}
-
-function getPhotoCandidates(destination) {
-  const baikeTitles = [
-    destination.name,
-    destination.name.replace(/镇|乡|街道|片区|村|县城|古城$/g, ""),
-    destination.city,
-    destination.province
-  ].filter(Boolean);
-
-  return {
-    explicit: destination.image,
-    fallback: getFallbackPhoto(destination),
-    baikeTitles: [...new Set(baikeTitles)]
-  };
-}
-
-function normalizeDomesticImageUrl(url) {
-  if (!url || typeof url !== "string") return "";
-  if (!/^https?:\/\//.test(url)) return "";
-  return url.replace(/^http:\/\//, "https://");
 }
 
 function canDisplayImage(url, timeout = 5000) {
@@ -260,63 +262,35 @@ function canDisplayImage(url, timeout = 5000) {
   });
 }
 
-function fetchJsonp(url, callbackParam = "callback", timeout = 3500) {
-  return new Promise((resolve, reject) => {
-    const callbackName = `__travelPhoto${Date.now()}${Math.floor(Math.random() * 10000)}`;
-    const script = document.createElement("script");
-    const cleanup = () => {
-      window.clearTimeout(timer);
-      delete window[callbackName];
-      script.remove();
-    };
-    const timer = window.setTimeout(() => {
-      cleanup();
-      reject(new Error("JSONP 图片接口超时"));
-    }, timeout);
-
-    window[callbackName] = (data) => {
-      cleanup();
-      resolve(data);
-    };
-    script.onerror = () => {
-      cleanup();
-      reject(new Error("JSONP 图片接口请求失败"));
-    };
-    script.src = `${url}${url.includes("?") ? "&" : "?"}${callbackParam}=${callbackName}`;
-    document.body.append(script);
-  });
+function getWikiTitles(destination) {
+  return [
+    destination.name,
+    destination.name.replace(/镇|乡|街道|片区|村|县城|古城$/g, ""),
+    destination.city,
+    destination.province
+  ].filter(Boolean);
 }
 
-async function fetchBaiduBaikeImage(title) {
+async function fetchWikiImage(title) {
   const params = new URLSearchParams({
-    scope: "103",
+    action: "query",
     format: "json",
-    appid: "379020",
-    bk_key: title,
-    bk_length: "600"
+    origin: "*",
+    prop: "pageimages",
+    piprop: "original",
+    redirects: "1",
+    titles: title
   });
-  const apiUrl = `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?${params.toString()}`;
-  let data = null;
-
-  try {
-    const response = await fetch(apiUrl);
-    if (response.ok) data = await response.json();
-  } catch {
-    data = null;
-  }
-
-  if (!data) {
-    data = await fetchJsonp(apiUrl);
-  }
-
-  const image = Array.isArray(data?.image) ? data.image[0] : data?.image;
-  return normalizeDomesticImageUrl(image || data?.thumbnail || data?.pic);
+  const response = await fetch(`https://zh.wikipedia.org/w/api.php?${params.toString()}`);
+  if (!response.ok) throw new Error("Wiki 图片接口请求失败");
+  const data = await response.json();
+  const page = Object.values(data.query?.pages || {}).find((item) => item.original?.source);
+  return page?.original?.source || "";
 }
 
 async function resolveDestinationPhoto(destination) {
-  const candidates = getPhotoCandidates(destination);
-  if (candidates.explicit && await canDisplayImage(candidates.explicit)) {
-    return { url: candidates.explicit, credit: destination.imageCredit || "配置图片" };
+  if (destination.image && await canDisplayImage(destination.image)) {
+    return { url: destination.image, credit: destination.imageCredit || "精选照片" };
   }
 
   const cached = localStorage.getItem(getPhotoCacheKey(destination));
@@ -326,20 +300,20 @@ async function resolveDestinationPhoto(destination) {
     localStorage.removeItem(getPhotoCacheKey(destination));
   }
 
-  for (const title of candidates.baikeTitles) {
+  for (const title of [...new Set(getWikiTitles(destination))]) {
     try {
-      const url = await fetchBaiduBaikeImage(title);
+      const url = await fetchWikiImage(title);
       if (url && await canDisplayImage(url)) {
-        const resolved = { url, credit: `图片来源：百度百科（${title}）` };
+        const resolved = { url, credit: `图片来源：Wiki/Wikimedia（${title}）` };
         localStorage.setItem(getPhotoCacheKey(destination), JSON.stringify(resolved));
         return resolved;
       }
     } catch {
-      // Try the next title, then fall back to generated artwork.
+      // Keep trying other title candidates, then fall back to local artwork.
     }
   }
 
-  return { url: candidates.fallback, credit: `未匹配到国内网站照片，已使用本地风景插画兜底：${destination.imageQuery || destination.name}`, fallback: true };
+  return { url: getFallbackPhoto(destination), credit: "本地生成主题图，可在配置中替换为精选照片", fallback: true };
 }
 
 async function renderDestinationPhoto(destination) {
@@ -855,8 +829,12 @@ function backToTop(event) {
 
 function chooseRandom() {
   const filtered = getFilteredDestinations();
-  const fallback = currentSeasonFilter.checked ? getCurrentSeasonDestinations() : destinations;
-  const pool = filtered.length ? filtered : fallback;
+  if (!filtered.length) {
+    renderNoResults();
+    scrollToResultOnMobile();
+    return;
+  }
+  const pool = filtered;
   let selected = pool[Math.floor(Math.random() * pool.length)];
 
   if (pool.length > 1) {
@@ -873,10 +851,12 @@ function chooseRandom() {
 function refreshPool() {
   const filtered = getFilteredDestinations();
   renderList(filtered);
+  if (!filtered.length) {
+    renderNoResults();
+    return;
+  }
   if (!filtered.some((item) => item.id === state.activeId)) {
-    const fallback = currentSeasonFilter.checked ? getCurrentSeasonDestinations() : destinations;
-    const next = filtered[0] || fallback[0] || destinations[0];
-    renderDestination(next);
+    renderDestination(filtered[0]);
   } else {
     const active = destinations.find((item) => item.id === state.activeId);
     renderDestination(active);
@@ -930,6 +910,7 @@ function init() {
   updateBackTopVisibility();
   [provinceFilter, regionFilter, moodFilter, seasonFilter, currentSeasonFilter, quietFilter].forEach((control) => {
     control.addEventListener("change", refreshPool);
+    control.addEventListener("input", refreshPool);
   });
 
   currentSeasonFilter.addEventListener("change", syncSeasonControl);
