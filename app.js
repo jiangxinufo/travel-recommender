@@ -238,14 +238,41 @@ function normalizeDomesticImageUrl(url) {
   return url.replace(/^http:\/\//, "https://");
 }
 
-function fetchJsonp(url, callbackParam = "callback") {
+function canDisplayImage(url, timeout = 5000) {
+  return new Promise((resolve) => {
+    if (!url) {
+      resolve(false);
+      return;
+    }
+
+    const image = new Image();
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = window.setTimeout(() => finish(false), timeout);
+    image.onload = () => finish(Boolean(image.naturalWidth || image.width));
+    image.onerror = () => finish(false);
+    image.src = url;
+  });
+}
+
+function fetchJsonp(url, callbackParam = "callback", timeout = 3500) {
   return new Promise((resolve, reject) => {
     const callbackName = `__travelPhoto${Date.now()}${Math.floor(Math.random() * 10000)}`;
     const script = document.createElement("script");
     const cleanup = () => {
+      window.clearTimeout(timer);
       delete window[callbackName];
       script.remove();
     };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("JSONP 图片接口超时"));
+    }, timeout);
 
     window[callbackName] = (data) => {
       cleanup();
@@ -288,15 +315,21 @@ async function fetchBaiduBaikeImage(title) {
 
 async function resolveDestinationPhoto(destination) {
   const candidates = getPhotoCandidates(destination);
-  if (candidates.explicit) return { url: candidates.explicit, credit: destination.imageCredit || "配置图片" };
+  if (candidates.explicit && await canDisplayImage(candidates.explicit)) {
+    return { url: candidates.explicit, credit: destination.imageCredit || "配置图片" };
+  }
 
   const cached = localStorage.getItem(getPhotoCacheKey(destination));
-  if (cached) return JSON.parse(cached);
+  if (cached) {
+    const cachedPhoto = JSON.parse(cached);
+    if (cachedPhoto.fallback || await canDisplayImage(cachedPhoto.url, 2500)) return cachedPhoto;
+    localStorage.removeItem(getPhotoCacheKey(destination));
+  }
 
   for (const title of candidates.baikeTitles) {
     try {
       const url = await fetchBaiduBaikeImage(title);
-      if (url) {
+      if (url && await canDisplayImage(url)) {
         const resolved = { url, credit: `图片来源：百度百科（${title}）` };
         localStorage.setItem(getPhotoCacheKey(destination), JSON.stringify(resolved));
         return resolved;
@@ -324,6 +357,22 @@ async function renderDestinationPhoto(destination) {
   const photo = await resolveDestinationPhoto(destination);
   if (wrap.dataset.loadingId !== token) return;
   destination.resolvedImage = photo;
+  img.onerror = () => {
+    if (wrap.dataset.loadingId !== token) return;
+    const fallback = { url: getFallbackPhoto(destination), credit: "图片加载失败，已切换为本地风景插画", fallback: true };
+    destination.resolvedImage = fallback;
+    localStorage.removeItem(getPhotoCacheKey(destination));
+    wrap.classList.add("is-fallback");
+    img.src = fallback.url;
+    caption.textContent = fallback.credit;
+  };
+  img.onload = () => {
+    if (wrap.dataset.loadingId !== token) return;
+    const currentPhoto = destination.resolvedImage || photo;
+    wrap.classList.toggle("is-fallback", Boolean(currentPhoto.fallback));
+    wrap.classList.remove("is-loading");
+    caption.textContent = currentPhoto.credit;
+  };
   img.src = photo.url;
   wrap.classList.toggle("is-fallback", Boolean(photo.fallback));
   wrap.classList.remove("is-loading");
