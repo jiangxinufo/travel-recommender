@@ -30,7 +30,7 @@ window.TRAVEL_DESTINATION_CONFIG = (() => {
   return {
     schemaVersion: 1,
     scope: "中国大陆31个省级行政区，每个省级区域10个县城/乡镇级目的地",
-    shareUrl: "https://jiangxinfo.github.io/travel-recommender/",
+    shareUrl: "https://jiangxinufo.github.io/travel-recommender/",
     contributionUrl: "https://docs.qq.com/",
     provinces: [
       {
