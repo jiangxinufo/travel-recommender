@@ -31,7 +31,7 @@ window.TRAVEL_DESTINATION_CONFIG = (() => {
     schemaVersion: 1,
     scope: "中国大陆31个省级行政区，每个省级区域10个县城/乡镇级目的地",
     shareUrl: "https://jiangxinufo.github.io/travel-recommender/",
-    contributionUrl: "https://docs.qq.com/",
+    contributionUrl: "https://docs.qq.com/markdown/DUGxUdmpUZFdwemp3",
     provinces: [
       {
         code: "beijing",
