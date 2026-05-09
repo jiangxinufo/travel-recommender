@@ -20,6 +20,7 @@ const resetButton = document.querySelector("#resetButton");
 const destinationList = document.querySelector("#destinationList");
 const poolCount = document.querySelector("#poolCount");
 const todayChip = document.querySelector("#todayChip");
+const resultPanel = document.querySelector(".result-panel");
 const posterButton = document.querySelector("#posterButton");
 const copyShareButton = document.querySelector("#copyShareButton");
 const copyPosterTextButton = document.querySelector("#copyPosterTextButton");
@@ -54,6 +55,9 @@ function normalizeDestinations(config) {
       reasons: item.reasons || [item.reason],
       route: item.route,
       transport: item.transport || provinceConfig.transport,
+      image: item.image || null,
+      imageQuery: item.imageQuery || [item.name, item.city, item.resource].filter(Boolean).join(" "),
+      imageCredit: item.imageCredit || "",
       sources: item.sources || provinceConfig.sources || []
     }))
   );
@@ -187,6 +191,7 @@ function renderDestination(destination) {
     .join("");
   renderFacts(destination);
   renderList(getFilteredDestinations());
+  renderDestinationPhoto(destination);
 }
 
 function getShareUrl() {
@@ -198,6 +203,95 @@ function getShareText(destination = state.activeDestination) {
   if (!destination) return "";
   const reason = destination.reasons.filter(Boolean)[0] || "它很适合短假放松";
   return `我在县镇旅行随机推荐器抽到了：${destination.province} ${destination.name}。\n\n推荐理由：${reason}\n\n打开也抽一个：${getShareUrl()}`;
+}
+
+function getPhotoCacheKey(destination) {
+  return `travel-photo:${destination.id}`;
+}
+
+function getFallbackPhoto(destination) {
+  const text = encodeURIComponent(`${destination.name} ${destination.mood[0] || "旅行"}`);
+  const bg = "dfeadf";
+  const fg = "2f7d62";
+  return `data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 675'%3E%3Crect width='1200' height='675' fill='%23${bg}'/%3E%3Cpath d='M0 454 210 210l165 190 225-270 290 330 160-190 150 184v221H0z' fill='%238eb579'/%3E%3Cpath d='M0 520c210-80 380 15 560-48 210-73 380 30 640-55v258H0z' fill='%236c9d5a'/%3E%3Ccircle cx='985' cy='110' r='58' fill='%23fffaf2' opacity='.76'/%3E%3Ctext x='70' y='575' font-size='52' font-weight='700' fill='%23${fg}' font-family='Microsoft YaHei, sans-serif'%3E${text}%3C/text%3E%3C/svg%3E`;
+}
+
+function getPhotoCandidates(destination) {
+  const query = encodeURIComponent(destination.imageQuery || destination.name);
+  const wikiTitles = [
+    destination.name,
+    destination.name.replace(/镇|乡|街道|片区|村|县城|古城$/g, ""),
+    destination.city,
+    destination.province
+  ].filter(Boolean);
+
+  return {
+    explicit: destination.image,
+    fallback: getFallbackPhoto(destination),
+    wikiTitles: [...new Set(wikiTitles)],
+    commonsUrl: `https://commons.wikimedia.org/w/index.php?search=${query}&title=Special:MediaSearch&type=image`
+  };
+}
+
+async function fetchWikiImage(title) {
+  const params = new URLSearchParams({
+    action: "query",
+    format: "json",
+    origin: "*",
+    prop: "pageimages",
+    piprop: "original",
+    redirects: "1",
+    titles: title
+  });
+  const response = await fetch(`https://zh.wikipedia.org/w/api.php?${params.toString()}`);
+  if (!response.ok) throw new Error("图片接口请求失败");
+  const data = await response.json();
+  const page = Object.values(data.query?.pages || {}).find((item) => item.original?.source);
+  return page?.original?.source || "";
+}
+
+async function resolveDestinationPhoto(destination) {
+  const candidates = getPhotoCandidates(destination);
+  if (candidates.explicit) return { url: candidates.explicit, credit: destination.imageCredit || "配置图片" };
+
+  const cached = localStorage.getItem(getPhotoCacheKey(destination));
+  if (cached) return JSON.parse(cached);
+
+  for (const title of candidates.wikiTitles) {
+    try {
+      const url = await fetchWikiImage(title);
+      if (url) {
+        const resolved = { url, credit: `图片来源：维基百科/维基共享资源（${title}）` };
+        localStorage.setItem(getPhotoCacheKey(destination), JSON.stringify(resolved));
+        return resolved;
+      }
+    } catch {
+      // Try the next title, then fall back to generated artwork.
+    }
+  }
+
+  return { url: candidates.fallback, credit: `未找到开放照片，可到维基共享资源搜索：${destination.imageQuery || destination.name}`, fallback: true };
+}
+
+async function renderDestinationPhoto(destination) {
+  const wrap = document.querySelector("#destinationPhotoWrap");
+  const img = document.querySelector("#destinationPhoto");
+  const caption = document.querySelector("#photoCaption");
+  const token = destination.id;
+  wrap.dataset.loadingId = token;
+  wrap.classList.add("is-loading");
+  wrap.classList.remove("is-fallback");
+  img.removeAttribute("src");
+  img.alt = `${destination.name}代表性照片`;
+  caption.textContent = "正在匹配代表照片";
+
+  const photo = await resolveDestinationPhoto(destination);
+  if (wrap.dataset.loadingId !== token) return;
+  destination.resolvedImage = photo;
+  img.src = photo.url;
+  wrap.classList.toggle("is-fallback", Boolean(photo.fallback));
+  wrap.classList.remove("is-loading");
+  caption.textContent = photo.credit;
 }
 
 function showToast(message) {
@@ -317,6 +411,30 @@ function drawPosterLandscape(ctx, destination) {
     ctx.fillRect(150, 392, 50, 72);
     ctx.fillRect(242, 392, 70, 42);
   }
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
+function drawCoverImage(ctx, image, x, y, width, height) {
+  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  const drawX = x + (width - drawWidth) / 2;
+  const drawY = y + (height - drawHeight) / 2;
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+  const gradient = ctx.createLinearGradient(0, y, 0, y + height);
+  gradient.addColorStop(0, "rgba(31,42,45,0.08)");
+  gradient.addColorStop(1, "rgba(31,42,45,0.22)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(x, y, width, height);
 }
 
 function makeQrCode(text) {
@@ -491,12 +609,22 @@ function drawQrCode(ctx, text, x, y, size) {
   });
 }
 
-function renderPoster(destination = state.activeDestination) {
+async function renderPoster(destination = state.activeDestination) {
   const ctx = posterCanvas.getContext("2d");
   ctx.clearRect(0, 0, posterCanvas.width, posterCanvas.height);
   ctx.fillStyle = "#fffaf2";
   ctx.fillRect(0, 0, 1080, 1440);
-  drawPosterLandscape(ctx, destination);
+  const photo = destination.resolvedImage || await resolveDestinationPhoto(destination);
+  if (photo && !photo.fallback) {
+    try {
+      const image = await loadImage(photo.url);
+      drawCoverImage(ctx, image, 0, 0, 1080, 520);
+    } catch {
+      drawPosterLandscape(ctx, destination);
+    }
+  } else {
+    drawPosterLandscape(ctx, destination);
+  }
 
   ctx.fillStyle = "#fffaf2";
   ctx.fillRect(0, 500, 1080, 940);
@@ -542,8 +670,8 @@ function renderPoster(destination = state.activeDestination) {
   ctx.fillText("县镇旅行随机推荐器", 72, 1380);
 }
 
-function openPoster() {
-  renderPoster();
+async function openPoster() {
+  await renderPoster();
   posterModal.hidden = false;
 }
 
@@ -556,6 +684,17 @@ function downloadPoster() {
   link.download = `${state.activeDestination.name}-旅行推荐.png`;
   link.href = posterCanvas.toDataURL("image/png");
   link.click();
+}
+
+function shouldScrollToResult() {
+  return typeof window.matchMedia === "function" && window.matchMedia("(max-width: 720px)").matches;
+}
+
+function scrollToResultOnMobile() {
+  if (!shouldScrollToResult()) return;
+  window.requestAnimationFrame(() => {
+    resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 function chooseRandom() {
@@ -572,6 +711,7 @@ function chooseRandom() {
 
   state.lastRandomId = selected.id;
   renderDestination(selected);
+  scrollToResultOnMobile();
 }
 
 function refreshPool() {
