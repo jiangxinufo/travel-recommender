@@ -6,8 +6,16 @@ const state = {
   lastRandomId: null,
   activeDestination: null,
   currentSeason: getCurrentSeason(new Date()),
-  todayLabel: formatToday(new Date())
+  todayLabel: formatToday(new Date()),
+  visitorMeta: null,
+  visitorMetaPromise: null
 };
+
+const CLICK_LOG_KEY = "travel-click-records-v1";
+const CLICK_SEEN_KEY = "travel-click-seen-v1";
+const VISITOR_META_KEY = "travel-visitor-meta-v1";
+const VISITOR_ID_KEY = "travel-visitor-id-v1";
+const MAX_CLICK_RECORDS = 200;
 
 const provinceFilter = document.querySelector("#provinceFilter");
 const regionFilter = document.querySelector("#regionFilter");
@@ -31,6 +39,12 @@ const downloadPosterButton = document.querySelector("#downloadPosterButton");
 const shareToast = document.querySelector("#shareToast");
 const contributeLink = document.querySelector("#contributeLink");
 const backTopButton = document.querySelector("#backTopButton");
+const clickLogCount = document.querySelector("#clickLogCount");
+const newClickCount = document.querySelector("#newClickCount");
+const repeatClickCount = document.querySelector("#repeatClickCount");
+const clickLogList = document.querySelector("#clickLogList");
+const exportClickLogButton = document.querySelector("#exportClickLogButton");
+const clearClickLogButton = document.querySelector("#clearClickLogButton");
 
 function normalizeDestinations(config) {
   if (!config || !Array.isArray(config.provinces)) {
@@ -107,6 +121,219 @@ function addOptions(select, values) {
     option.textContent = value;
     select.append(option);
   });
+}
+
+function readStorageJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorageJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getClientId() {
+  try {
+    const existing = localStorage.getItem(VISITOR_ID_KEY);
+    if (existing) return existing;
+    const id = typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `visitor-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(VISITOR_ID_KEY, id);
+    return id;
+  } catch {
+    return "visitor-storage-unavailable";
+  }
+}
+
+function normalizeVisitorMeta(data = {}) {
+  const clientId = getClientId();
+  const ip = data.ip || "未知";
+  return {
+    ip,
+    province: data.region || data.region_name || data.province || "未知",
+    city: data.city || "未知",
+    country: data.country || "未知",
+    visitorKey: ip !== "未知" ? `ip:${ip}` : `client:${clientId}`,
+    source: data.source || "local",
+    fetchedAt: new Date().toISOString()
+  };
+}
+
+async function resolveVisitorMeta() {
+  if (state.visitorMeta) return state.visitorMeta;
+  if (state.visitorMetaPromise) return state.visitorMetaPromise;
+
+  const cached = readStorageJson(VISITOR_META_KEY, null);
+  if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < 30 * 60 * 1000) {
+    state.visitorMeta = cached;
+    return cached;
+  }
+
+  state.visitorMetaPromise = (async () => {
+    try {
+      const response = await fetch("https://ipwho.is/?lang=zh-CN", { cache: "no-store" });
+      if (!response.ok) throw new Error("IP 查询失败");
+      const data = await response.json();
+      if (data.success === false) throw new Error(data.message || "IP 定位失败");
+      const meta = normalizeVisitorMeta({ ...data, source: "ipwho.is" });
+      writeStorageJson(VISITOR_META_KEY, meta);
+      state.visitorMeta = meta;
+      return meta;
+    } catch {
+      const fallback = cached || normalizeVisitorMeta();
+      state.visitorMeta = fallback;
+      return fallback;
+    } finally {
+      state.visitorMetaPromise = null;
+    }
+  })();
+
+  return state.visitorMetaPromise;
+}
+
+function getClickRecords() {
+  const records = readStorageJson(CLICK_LOG_KEY, []);
+  return Array.isArray(records) ? records : [];
+}
+
+function getClickSeenMap() {
+  const seen = readStorageJson(CLICK_SEEN_KEY, {});
+  return seen && typeof seen === "object" && !Array.isArray(seen) ? seen : {};
+}
+
+function formatClickTime(value) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderClickLog() {
+  const records = getClickRecords();
+  const newCount = records.filter((item) => item.clickType === "new").length;
+  const repeatCount = records.filter((item) => item.clickType === "repeat").length;
+
+  clickLogCount.textContent = `${records.length} 条`;
+  newClickCount.textContent = `新点击 ${newCount}`;
+  repeatClickCount.textContent = `重复点击 ${repeatCount}`;
+
+  if (!records.length) {
+    clickLogList.innerHTML = '<p class="empty-log">暂无点击记录</p>';
+    return;
+  }
+
+  clickLogList.innerHTML = records.slice(0, 8).map((record) => {
+    const typeLabel = record.clickType === "repeat" ? "重复" : "新";
+    const location = [record.visitorProvince, record.visitorCity].filter(Boolean).join(" · ") || "未知省市";
+    return `
+      <article class="click-log-item">
+        <div>
+          <strong>${escapeHtml(record.destinationName)}</strong>
+          <span>${escapeHtml(record.destinationProvince)}${record.destinationCity ? " · " + escapeHtml(record.destinationCity) : ""}</span>
+        </div>
+        <div class="click-log-meta">
+          <span class="click-type ${record.clickType === "repeat" ? "is-repeat" : ""}">${typeLabel}</span>
+          <span>${escapeHtml(location)}</span>
+          <span>${escapeHtml(record.ip)}</span>
+          <time datetime="${escapeHtml(record.clickedAt)}">${formatClickTime(record.clickedAt)}</time>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function sendClickRecord(record) {
+  if (!appConfig.clickLogEndpoint) return;
+
+  const payload = JSON.stringify(record);
+  try {
+    if (typeof navigator.sendBeacon === "function") {
+      const blob = new Blob([payload], { type: "application/json" });
+      if (navigator.sendBeacon(appConfig.clickLogEndpoint, blob)) return;
+    }
+    fetch(appConfig.clickLogEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      keepalive: true
+    }).catch(() => {});
+  } catch {
+    // Local records still work when the remote endpoint is unavailable.
+  }
+}
+
+async function recordDestinationClick(destination, trigger) {
+  if (!destination) return;
+
+  const meta = await resolveVisitorMeta();
+  const clickedAt = new Date().toISOString();
+  const seen = getClickSeenMap();
+  const seenKey = `${meta.visitorKey}:${destination.id}`;
+  const clickType = seen[seenKey] ? "repeat" : "new";
+  const record = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    clickType,
+    trigger,
+    clickedAt,
+    ip: meta.ip,
+    visitorProvince: meta.province,
+    visitorCity: meta.city,
+    visitorCountry: meta.country,
+    destinationId: destination.id,
+    destinationName: destination.name,
+    destinationProvince: destination.province,
+    destinationCity: destination.city,
+    destinationRegion: destination.region
+  };
+
+  seen[seenKey] = {
+    firstClickedAt: seen[seenKey]?.firstClickedAt || clickedAt,
+    lastClickedAt: clickedAt,
+    count: (seen[seenKey]?.count || 0) + 1
+  };
+  writeStorageJson(CLICK_SEEN_KEY, seen);
+  writeStorageJson(CLICK_LOG_KEY, [record, ...getClickRecords()].slice(0, MAX_CLICK_RECORDS));
+  renderClickLog();
+  sendClickRecord(record);
+}
+
+function exportClickRecords() {
+  const records = getClickRecords();
+  const blob = new Blob([JSON.stringify(records, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.download = `travel-click-records-${new Date().toISOString().slice(0, 10)}.json`;
+  link.href = url;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function clearClickRecords() {
+  writeStorageJson(CLICK_LOG_KEY, []);
+  writeStorageJson(CLICK_SEEN_KEY, {});
+  renderClickLog();
 }
 
 function getFilteredDestinations() {
@@ -893,6 +1120,7 @@ function chooseRandom() {
 
   state.lastRandomId = selected.id;
   renderDestination(selected);
+  recordDestinationClick(selected, "random");
   scrollToResultOnMobile();
 }
 
@@ -951,6 +1179,8 @@ function init() {
     await copyText(getShareText());
     showToast("分享文案已复制");
   });
+  exportClickLogButton.addEventListener("click", exportClickRecords);
+  clearClickLogButton.addEventListener("click", clearClickRecords);
   backTopButton.addEventListener("click", backToTop);
   backTopButton.addEventListener("pointerup", backToTop);
   backTopButton.addEventListener("touchend", backToTop, { passive: false });
@@ -968,8 +1198,14 @@ function init() {
     const card = event.target.closest("[data-id]");
     if (!card) return;
     const destination = destinations.find((item) => item.id === card.dataset.id);
-    if (destination) renderDestination(destination);
+    if (destination) {
+      renderDestination(destination);
+      recordDestinationClick(destination, "destination-list");
+    }
   });
+
+  renderClickLog();
+  resolveVisitorMeta().then(renderClickLog);
 
   const currentSeasonDestinations = getFilteredDestinations();
   renderDestination(currentSeasonDestinations[0] || destinations[0]);

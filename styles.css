@@ -640,6 +640,127 @@ h3 {
   line-height: 1.45;
 }
 
+.click-log-panel {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid rgba(13, 112, 128, 0.22);
+  border-radius: 8px;
+  background: rgba(13, 112, 128, 0.07);
+}
+
+.click-log-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.click-log-head h3 {
+  margin-bottom: 0;
+}
+
+.click-log-head span {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--teal);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.click-log-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.click-log-stats span {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fffaf2;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.click-log-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.click-log-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf2;
+}
+
+.click-log-item strong,
+.click-log-item span,
+.click-log-item time {
+  display: block;
+}
+
+.click-log-item strong {
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.click-log-item span,
+.click-log-item time,
+.empty-log {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.click-log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.click-log-meta .click-type {
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--green);
+  font-weight: 800;
+}
+
+.click-log-meta .click-type.is-repeat {
+  background: var(--ochre);
+}
+
+.empty-log {
+  margin: 0;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(255, 250, 242, 0.72);
+}
+
+.click-log-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.compact-action {
+  min-height: 38px;
+  padding: 0 10px;
+  font-size: 0.84rem;
+}
+
 .contribute-panel {
   margin-top: 16px;
   padding: 16px;
